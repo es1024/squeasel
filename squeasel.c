@@ -4730,6 +4730,9 @@ static void *worker_thread(void *thread_func_param) {
 #endif
 
   struct sq_context *ctx = (struct sq_context *) thread_func_param;
+  if (ctx->callbacks.enter_worker_thread != NULL) {
+    (*ctx->callbacks.enter_worker_thread)();
+  }
   struct sq_connection *conn;
 
   conn = (struct sq_connection *) calloc(1, sizeof(*conn) + MAX_REQUEST_SIZE);
@@ -4775,6 +4778,10 @@ static void *worker_thread(void *thread_func_param) {
   (void) pthread_cond_signal(&ctx->cond);
   assert(ctx->num_threads >= 0);
   (void) pthread_mutex_unlock(&ctx->mutex);
+
+  if (ctx->callbacks.leave_worker_thread != NULL) {
+    (*ctx->callbacks.leave_worker_thread)();
+  }
 
   DEBUG_TRACE(("exiting"));
   return NULL;

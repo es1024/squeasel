@@ -160,6 +160,12 @@ struct sq_callbacks {
   // Parameters:
   //   status: HTTP error status code.
   int  (*http_error)(struct sq_connection *, int status);
+
+  // Called on a worker thread when it starts.
+  void (*enter_worker_thread)();
+
+  // Called on a worker thread when it ends.
+  void (*leave_worker_thread)();
 };
 
 // Start web server.
