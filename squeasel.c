@@ -4281,8 +4281,10 @@ static void *worker_thread(void *thread_func_param) {
 #endif
 
   struct sq_context *ctx = (struct sq_context *) thread_func_param;
-  if (ctx->callbacks.enter_worker_thread != NULL) {
-    (*ctx->callbacks.enter_worker_thread)();
+  if (ctx->callbacks.enter_worker_thread != NULL &&
+      (*ctx->callbacks.enter_worker_thread)()) {
+    cry(fc(ctx), "%s", "Failed to enter worker thread");
+    goto exit_thread;
   }
   struct sq_connection *conn;
 
@@ -4323,16 +4325,17 @@ static void *worker_thread(void *thread_func_param) {
     free(conn);
   }
 
+  if (ctx->callbacks.leave_worker_thread != NULL) {
+    (*ctx->callbacks.leave_worker_thread)();
+  }
+
+  exit_thread:
   // Signal master that we're done with connection and exiting
   (void) pthread_mutex_lock(&ctx->mutex);
   ctx->num_threads--;
   (void) pthread_cond_signal(&ctx->cond);
   assert(ctx->num_threads >= 0);
   (void) pthread_mutex_unlock(&ctx->mutex);
-
-  if (ctx->callbacks.leave_worker_thread != NULL) {
-    (*ctx->callbacks.leave_worker_thread)();
-  }
 
   DEBUG_TRACE(("exiting"));
   return NULL;
