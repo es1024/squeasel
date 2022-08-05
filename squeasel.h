@@ -173,7 +173,10 @@ struct sq_callbacks {
   int  (*http_error)(struct sq_connection *, int status);
 
   // Called on a worker thread when it starts.
-  void (*enter_worker_thread)();
+  // Return value:
+  //   non-0: exit worker thread immediately.
+  //   0:     continue with normal processing.
+  int  (*enter_worker_thread)();
 
   // Called on a worker thread when it ends.
   void (*leave_worker_thread)();
