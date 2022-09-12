@@ -3491,7 +3491,7 @@ static void handle_request(struct sq_connection *conn) {
   DEBUG_TRACE(("%s", ri->uri));
   // Perform redirect and auth checks before calling begin_request() handler.
   // Otherwise, begin_request() would need to perform auth checks and redirects.
-  if (!conn->client.is_ssl && conn->client.ssl_redir &&
+  if (!conn->request_info.is_ssl && conn->client.ssl_redir &&
       (ssl_index = get_first_ssl_listener_index(conn->ctx)) > -1) {
     redirect_to_https_port(conn, ssl_index);
   } else if (!is_put_or_delete_request(conn) &&
@@ -3591,11 +3591,15 @@ static int is_valid_port(unsigned int port) {
   return port <= 0xffff;
 }
 
-// Valid listening port specification is: [ip_address:]port[s]
-// Examples: 80, 443s, 127.0.0.1:3128, 1.2.3.4:8080s
-// TODO(lsm): add parsing of the IPv6 address
+// Valid listening port specification is: [ip_address:]port[s][r]
+// Examples: 80, 443s, 127.0.0.1:3128, 1.2.3.4:8080s, 127.0.0.1:9000rs
+// no modifier: accept HTTP traffic.
+// s: accept HTTPS traffic.
+// r: accept HTTP traffic but redirect to a port accepting HTTPS traffic.
+// s + r: accept both HTTP and HTTPS traffic and redirect HTTP to HTTPS.
 static int parse_port_string(const struct vec *vec, struct socket *so) {
-  unsigned int a, b, c, d, ch, port;
+  unsigned int a, b, c, d, port;
+  const char *ch;
   int len;
 #if defined(USE_IPV6)
   char buf[100];
@@ -3626,13 +3630,17 @@ static int parse_port_string(const struct vec *vec, struct socket *so) {
     port = len = 0;   // Parsing failure. Make port invalid.
   }
 
-  ch = vec->ptr[len];  // Next character after the port number
-  so->is_ssl = ch == 's';
-  so->ssl_redir = ch == 'r';
+  ch = &vec->ptr[len];  // Next character after the port number.
+  so->is_ssl = 0;
+  so->ssl_redir = 0;
+  while (*ch == 's' || *ch == 'r') {
+    so->is_ssl = so->is_ssl || *ch == 's';
+    so->ssl_redir = so->ssl_redir || *ch == 'r';
+    ++ch;
+  }
 
-  // Make sure the port is valid and vector ends with 's', 'r' or ','
-  return is_valid_port(port) &&
-    (ch == '\0' || ch == 's' || ch == 'r' || ch == ',');
+  // Make sure the port is valid and vector ends with port, 's', 'r' or ','.
+  return is_valid_port(port) && (*ch == '\0' || *ch == ',');
 }
 
 static int set_ports_option(struct sq_context *ctx) {
@@ -3787,7 +3795,18 @@ static int set_uid_option(struct sq_context *ctx) {
 
 static pthread_mutex_t *ssl_mutexes;
 
+// This function takes a connection that may be either SSL or unencrypted, and processes the
+// handshake and sets up SSL state if it is SSL, such that after this function, both SSL
+// and unencrypted traffic can be handled with the same code.
 static int sslize(struct sq_connection *conn, SSL_CTX *s, int (*func)(SSL *)) {
+  char first_byte;
+  // TLS handshake always starts with a ContentType byte equal to 22 (RFC8446 5.1).
+  // This check allows us to later process unencrypted connections properly, without
+  // OpenSSL consuming bytes from the socket attempting to process a handshake.
+  if (!recv(conn->client.sock, &first_byte, 1, MSG_PEEK) || first_byte != 22) {
+    return 0;
+  }
+
   return (conn->ssl = SSL_new(s)) != NULL &&
     SSL_set_fd(conn->ssl, conn->client.sock) == 1 &&
     func(conn->ssl) == 1;
@@ -4310,13 +4329,13 @@ static void *worker_thread(void *thread_func_param) {
       memcpy(&conn->request_info.remote_ip,
              &conn->client.rsa.sin.sin_addr.s_addr, 4);
       conn->request_info.remote_ip = ntohl(conn->request_info.remote_ip);
-      conn->request_info.is_ssl = conn->client.is_ssl;
 
-      if (!conn->client.is_ssl
-#ifndef NO_SSL
-          || sslize(conn, conn->ctx->ssl_ctx, SSL_accept)
-#endif
-         ) {
+      conn->request_info.is_ssl = conn->client.is_ssl
+          ? sslize(conn, conn->ctx->ssl_ctx, SSL_accept)
+          : 0;
+
+      if (conn->client.is_ssl == conn->request_info.is_ssl ||
+          (conn->client.is_ssl && conn->client.ssl_redir)) {
         process_new_connection(conn);
       }
 
