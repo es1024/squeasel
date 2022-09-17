@@ -3462,9 +3462,13 @@ static void redirect_to_https_port(struct sq_connection *conn, int ssl_index) {
     sockaddr_to_string(host, sizeof(host), &conn->client.lsa);
   }
 
-  sq_printf(conn, "HTTP/1.1 302 Found\r\nLocation: https://%s:%d%s\r\n\r\n",
-            host, (int) ntohs(conn->ctx->listening_sockets[ssl_index].
-                              lsa.sin.sin_port), conn->request_info.uri);
+  sq_printf(conn, "HTTP/1.1 302 Found\r\nLocation: https://%s:%d%s",
+            host, (int) ntohs(conn->ctx->listening_sockets[ssl_index].lsa.sin.sin_port),
+            conn->request_info.uri);
+  if (conn->request_info.query_string) {
+    sq_printf(conn, "?%s", conn->request_info.query_string);
+  }
+  sq_printf(conn, "\r\n\r\n");
 }
 
 // This is the heart of the Squeasel's logic.
